@@ -1,0 +1,42 @@
+# Environments & Virtual Envs
+.venv/
+venv/
+env/
+
+# Python cache & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Experiment logs & tracking
+runs/
+logs/
+wandb/
+tensorboard/
+*.log
+
+# Checkpoints, weights & models
+*.zip
+*.pkl
+*.pt
+*.pth
+*.onnx
+
+# Evaluation media & videos
+videos/
+*.mp4
+*.gif
+
+# Unity binaries (ignore large executables, keep folder structure)
+binaries/*
+!binaries/.gitkeep
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
