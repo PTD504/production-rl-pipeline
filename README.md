@@ -52,5 +52,43 @@ uv run --extra unity python scripts/test_push_block_env.py --gui
 For quick non-visual sanity checking in terminal/CI:
 
 ```bash
-uv run --extra unity python scripts/test_push_block_env.py --steps 100
+uv run python scripts/test_push_block_env.py --steps 100
 ```
+
+---
+
+## 🔬 Phase 0: Environment Profiling & Baseline Benchmarking
+
+Before training reinforcement learning policies, the pipeline requires **Automated MDP Profiling** and **Random Policy Benchmarking** to establish quantitative environment specifications and lower-bound reference points.
+
+### 1. Automated MDP Profiler (`inspect_env.py`)
+
+Inspects raw environment specs directly from the executable binary without assumptions. Measures true observation bounds, action dimensions, step rewards, horizon limits, and sampling throughput (FPS):
+
+```bash
+# Run MDP inspection across 500 steps
+uv run python scripts/inspect_env.py --config configs/envs/push_block.yaml --steps 500
+```
+
+- **Metrics extracted:**
+  - $\mathcal{S}$ (Observation Space): shape, dtype, dynamic range, NaN/Inf anomaly check.
+  - $\mathcal{A}$ (Action Space): discrete action branches or continuous bounds.
+  - Throughput: actual transition throughput (typically $>2,000$ FPS across 32 arenas).
+  - Rewards: step penalties vs. terminal sparse signals.
+
+### 2. Random Baseline Benchmarker (`run_baseline.py`)
+
+Runs a stochastic random policy over a target number of episodes to establish the empirical **Lower Bound** (Return, Episode Length, Success Rate):
+
+```bash
+# Evaluate Random Policy over 100 episodes
+uv run python scripts/run_baseline.py --config configs/envs/push_block.yaml --episodes 100
+
+# Optional: save benchmark metrics to JSON for evaluation comparisons
+uv run python scripts/run_baseline.py --config configs/envs/push_block.yaml --episodes 100 --output benchmarks/random_baseline.json
+```
+
+- **Output Metrics:**
+  - `Mean Episode Return ± Std`: baseline score before learning.
+  - `Mean Episode Length`: empirical horizon under random walk.
+  - `Success Rate`: accidental goal completion rate.
