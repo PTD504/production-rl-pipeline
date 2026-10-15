@@ -18,7 +18,7 @@ from src.envs.registry import build_vec_env
 
 def main():
     parser = argparse.ArgumentParser(description="Test and visualize Push Block environment.")
-    parser.add_argument("--config", type=str, default="configs/push_block_ppo.yaml", help="Path to config file.")
+    parser.add_argument("--config", type=str, default="configs/envs/push_block.yaml", help="Path to config file.")
     parser.add_argument("--steps", type=int, default=300, help="Number of steps to run.")
     parser.add_argument("--gui", action="store_true", help="Launch with graphical window (no_graphics=False).")
     parser.add_argument("--time-scale", type=float, default=1.0, help="Simulation speed multiplier (1.0 for real-time visual inspection).")

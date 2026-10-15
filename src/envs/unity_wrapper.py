@@ -87,6 +87,7 @@ class UnityToSB3VecEnv(VecEnv):
         num_envs = len(self._agent_ids)
 
         super().__init__(num_envs=num_envs, observation_space=observation_space, action_space=action_space)
+        self.render_mode = None
 
         self._actions: Optional[np.ndarray] = None
         self._last_obs = np.zeros((self.num_envs, total_obs_dim), dtype=np.float32)
@@ -117,17 +118,40 @@ class UnityToSB3VecEnv(VecEnv):
         self._actions = np.asarray(actions)
 
     def step_wait(self) -> VecEnvStepReturn:
+        """
+        The step_wait method is called after step_async to retrieve the results of the environment step.
+        So if you want to perform any processing on the actions, the rewards (e.g., reward shaping), or observations, 
+        # you can do it here. This method is responsible for sending the actions to the Unity environment,
+        # stepping the environment, and then retrieving the observations, rewards, dones, and infos.
+        """
         assert self._actions is not None, "step_async must be called before step_wait"
 
-        # Format action tuple for Unity
-        if self.spec.action_spec.is_discrete():
-            discrete_actions = self._actions.reshape(self.num_envs, -1)
-            action_tuple = ActionTuple(discrete=discrete_actions)
-        else:
-            continuous_actions = self._actions.reshape(self.num_envs, -1).astype(np.float32)
-            action_tuple = ActionTuple(continuous=continuous_actions)
+        # Check which agents are currently requesting decisions from Unity
+        decision_steps, _ = self.env.get_steps(self.behavior_name)
 
-        self.env.set_actions(self.behavior_name, action_tuple)
+        if len(decision_steps) > 0:
+            # Map SB3 arena indices to the active Unity agents requesting decisions
+            active_actions = []
+            for agent_id in decision_steps.agent_id:
+                if agent_id in self._agent_id_to_index:
+                    arena_idx = self._agent_id_to_index[agent_id]
+                    active_actions.append(self._actions[arena_idx])
+                else:
+                    active_actions.append(self.action_space.sample())
+
+            active_actions = np.array(active_actions)
+
+            # Format action tuple for Unity
+            if self.spec.action_spec.is_discrete():
+                discrete_actions = active_actions.reshape(len(decision_steps), -1).astype(np.int32)
+                action_tuple = ActionTuple(discrete=discrete_actions)
+            else:
+                continuous_actions = active_actions.reshape(len(decision_steps), -1).astype(np.float32)
+                action_tuple = ActionTuple(continuous=continuous_actions)
+
+            self.env.set_actions(self.behavior_name, action_tuple)
+
+        # Advance Unity environment
         self.env.step()
 
         decision_steps, terminal_steps = self.env.get_steps(self.behavior_name)
