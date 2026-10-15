@@ -1,0 +1,14 @@
+# Environment Configuration: Unity ML-Agents Push Block
+project_name: "production-rl-pipeline"
+seed: 42
+
+env:
+  name: "PushBlock"
+  backend: "unity"
+  binary_path: "binaries/Startup/Startup.x86_64"
+  scene_name: "Assets/ML-Agents/Examples/PushBlock/Scenes/PushBlock.unity"
+  time_scale: 20.0
+  no_graphics: true
+  base_port: 5005
+  norm_obs: false
+  norm_reward: false
