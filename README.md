@@ -4,7 +4,7 @@ A modular, production-ready Reinforcement Learning (RL) pipeline engineered to s
 
 ---
 
-## 🎯 Objective
+## Objective
 
 In real-world applications, RL projects often fail not because of algorithm choice, but due to brittle pipelines, dependency conflicts, unstandardized environment interfaces, and deployment gaps. 
 
@@ -12,7 +12,7 @@ This repository provides an end-to-end, reproducible RL engineering framework de
 
 ---
 
-## 🎮 Environments
+## Environments
 
 ### 1. Unity ML-Agents: Push Block
 - **Domain:** Discrete navigation & physical manipulation.
@@ -24,7 +24,7 @@ This repository provides an end-to-end, reproducible RL engineering framework de
 
 ---
 
-## 🚀 Getting Started & Testing
+## Getting Started & Testing
 
 ### Installation
 
@@ -57,7 +57,7 @@ uv run python scripts/test_push_block_env.py --steps 100
 
 ---
 
-## 🔬 Phase 0: Environment Profiling & Baseline Benchmarking
+## Phase 0: Environment Profiling & Baseline Benchmarking
 
 Before training reinforcement learning policies, the pipeline requires **Automated MDP Profiling** and **Random Policy Benchmarking** to establish quantitative environment specifications and lower-bound reference points.
 
@@ -92,3 +92,131 @@ uv run python scripts/run_baseline.py --config configs/envs/push_block.yaml --ep
   - `Mean Episode Return ± Std`: baseline score before learning.
   - `Mean Episode Length`: empirical horizon under random walk.
   - `Success Rate`: accidental goal completion rate.
+
+---
+
+## Phase 1: MDP Modeling & Formulation
+
+Before choosing an algorithm or writing training scripts, we mathematically model the Push Block environment as a Markov Decision Process (MDP) tuple $(\mathcal{S}, \mathcal{A}, \mathcal{P}, \mathcal{R}, \gamma)$.
+
+- **Observation Space ($\mathcal{S}$):** Continuous 210-dimensional vector ($\mathbb{R}^{210}$), pre-normalized in $[0.0, 1.0]$. Composed of 14 Raycast sensors $\times$ 5 attributes (3 detectable object tags + distance + hit indicator) $\times$ 3 stacked history frames to convey velocity without requiring recurrent networks (RNN/LSTM).
+- **Action Space ($\mathcal{A}$):** $\text{Discrete}(7)$ actuator commands (Forward, Backward, Strafe Left, Strafe Right, Rotate Clockwise, Rotate Counter-Clockwise, and No-op).
+- **Reward Function ($\mathcal{R}$):** Sparse terminal success reward of $+5.0$ upon pushing the block into the green goal zone, with an existential time-penalty of $-0.001$ per step to encourage minimum-length trajectories.
+- **Exploration Bottleneck:** Random walk benchmarking logged **0 goals in 16,000 steps**, demonstrating that accidental block navigation has near-zero probability. Exploration strategy is the primary learning bottleneck.
+
+Detailed mathematical breakdown and empirical analysis: **[docs/01_mdp_modeling.md](docs/01_mdp_modeling.md)**.
+
+---
+
+## Phase 2: Algorithm Selection & Decision Matrix
+
+Algorithm selection is grounded in mathematical properties, exploration dynamics, and architectural hardware fit:
+
+1. **Continuous Algorithms (DDPG, TD3, continuous SAC) are eliminated:** The environment strictly requires discrete actions $\text{Discrete}(7)$.
+2. **PPO strictly dominates A2C:** Multi-epoch mini-batch updates on the rollout buffer yield dramatically higher sample efficiency; surrogate clipping acts as a soft trust region preventing policy collapse; and batched rollouts map 1:1 to our high-throughput 32-arena setup.
+3. **The Value-Based Reality Check (Why NOT DQN):**
+   - **Replay Buffer Tax:** DQN requires a massive persistent buffer ($>1,750\text{ MB}$) with random-access sampling, introducing high cache misses and memory contention on a 6,000+ FPS stream. PPO uses an ephemeral rollout buffer of only $\approx 3.4\text{ MB}$ ($>500\times$ less memory) that fits entirely in CPU L3 / GPU VRAM.
+   - **Exploration in Sparse Rewards:** DQN's $\epsilon$-greedy exploration takes memoryless isotropic random walks that fail in Push Block and freeze into local minima when $\epsilon$ decays. PPO optimizes a smooth `Categorical` distribution with an explicit **Entropy Regularization bonus** ($\mathcal{H}(\pi)$) to maintain persistent multi-modal exploration.
+   - **The Deadly Triad:** DQN couples function approximation, bootstrapping, and off-policy data. PPO operates strictly on-policy with clipped surrogate objectives and GAE ($\lambda = 0.95$), guaranteeing monotonic learning stability.
+
+Detailed decision matrix and trade-off analysis: **[docs/02_algorithm_selection.md](docs/02_algorithm_selection.md)**.
+
+---
+
+## Phase 3: Production Training Pipeline (`train.py`)
+
+A modular, config-driven training pipeline supporting dual-environment evaluation, automatic checkpointing, and **Weights & Biases (W&B)** multi-seed run grouping.
+
+### 1. Configuration & Default Baseline
+
+All experiment hyperparameters live inside YAML configurations. The baseline experiment is located at **[configs/experiments/default_push_block_ppo.yaml](configs/experiments/default_push_block_ppo.yaml)**.
+
+- **Rollout Batching:** 128 steps per arena across 32 arenas ($4,096$ transitions per update).
+- **Optimization:** 4 mini-batch epochs per rollout with batch size 128 on GPU.
+- **Exploration Engine:** Entropy bonus coefficient `ent_coef: 0.01` to conquer the sparse reward landscape.
+- **Trust Region:** Surrogate clipping `clip_range: 0.2`.
+- **Credit Assignment:** Discount factor $\gamma = 0.99$ with GAE $\lambda = 0.95$.
+
+### 2. Running Training
+
+#### Standard Run with Weights & Biases Logging:
+```bash
+uv run python scripts/train.py --config configs/experiments/default_push_block_ppo.yaml
+```
+
+#### Multi-Seed Automated Sweep (Mean ± Std in W&B):
+Run multiple seeds sequentially; W&B automatically groups them by `experiment_name` to display mean curves with shaded standard deviation:
+```bash
+for seed in 42 100 2024; do
+    uv run python scripts/train.py --config configs/experiments/default_push_block_ppo.yaml --seed $seed
+done
+```
+
+#### Local / Offline Run (Without WandB Cloud):
+```bash
+# Disable WandB entirely (local TensorBoard only)
+uv run python scripts/train.py --config configs/experiments/default_push_block_ppo.yaml --no-wandb
+
+# Or run WandB in offline mode for later syncing
+uv run python scripts/train.py --config configs/experiments/default_push_block_ppo.yaml --wandb-offline
+```
+
+#### Fast CI / Sanity Check Run:
+Run a quick test of the training and evaluation loops (e.g., 256 steps without waiting for full convergence):
+```bash
+uv run python scripts/train.py --total-timesteps 256 --no-wandb --port 5035 --eval-port 5045
+```
+
+### 3. Training Artifacts Structure
+
+Every run creates an isolated, self-contained output directory under `experiments/outputs/<experiment_name>/seed_<seed>/`:
+```text
+experiments/outputs/default_push_block_ppo/seed_42/
+├── effective_config.yaml      # Exact configuration snapshot used for this run
+├── best_model/                # Checkpoint with highest evaluation return
+│   └── best_model.zip
+├── checkpoints/               # Periodic model snapshots (every 50,000 steps)
+│   └── model_*.zip
+├── eval_logs/                 # Evaluation returns and episode lengths (eval_logs.npz)
+├── tensorboard/               # Local TensorBoard event logs
+├── final_model.zip            # Policy saved at the end of training
+└── final_vec_normalize.pkl    # Final observation normalization statistics
+```
+
+---
+
+## Visual Policy Evaluation (`visualize.py`)
+
+To observe the trained policy controlling agents in real-time 3D desktop graphics:
+
+```bash
+uv run python scripts/visualize.py --model experiments/outputs/default_push_block_ppo/seed_42/best_model/best_model.zip
+```
+
+- **Features:**
+  - Auto-detects and loads `final_vec_normalize.pkl` to preserve observation statistics.
+  - Opens a standalone Unity 3D window showing all 32 arenas.
+  - Real-time physical speed (`--time-scale 1.0`) with micro-sleep pacing for smooth 50-60 FPS rendering.
+  - Dedicated TCP port (`--port 5055`) to prevent port collisions.
+  - Real-time terminal logging on every goal scored (`[GOAL!]`) and episode completion.
+
+---
+
+## Phase 4: Empirical Results & Verification
+
+We evaluated the baseline PPO configuration across **3 independent seeds** (42, 100, 2024) for 500,000 steps each, tracking all runs in Weights & Biases under the group `default_push_block_ppo`.
+
+### Key Results Summary
+
+- **Evaluation Return:** Achieved **4.722 ± 0.216** mean reward across all seeds, with individual checkpoints reaching **4.971** (near the theoretical ceiling of 5.0).
+- **Time to Goal:** Mean episode length dropped from 1,000 steps to **101.06 ± 47.36** steps (a ~90% reduction in completion time).
+- **Critic Fidelity:** `explained_variance` averaged **0.656 ± 0.141** (reaching up to 0.753), providing high-accuracy baseline predictions and minimal policy gradient noise.
+- **Trust Region Stability:** `approx_kl` maintained at **0.0074 ± 0.0008** and `clip_fraction` at **6.91% ± 0.90%**, confirming optimal policy updates without divergence.
+
+### Engineering Verdict: Early Acceptance
+
+The baseline PPO configuration achieved a 100% success rate without hyperparameter tuning. Because performance reached the physical ceiling of the environment and variance across seeds remained tightly bounded, hyperparameter tuning was intentionally bypassed to optimize compute resources.
+
+Full charts, detailed analysis, and step-by-step metric breakdown: **[docs/03_baseline_experiments.md](docs/03_baseline_experiments.md)**.
+
+
