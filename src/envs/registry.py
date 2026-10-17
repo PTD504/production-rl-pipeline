@@ -15,8 +15,12 @@ def build_vec_env(cfg: Dict[str, Any], is_eval: bool = False) -> VecNormalize:
     if backend == "unity":
         from src.envs.unity_wrapper import make_unity_vec_env
 
-        time_scale = 1.0 if is_eval else cfg["env"].get("time_scale", 20.0)
-        no_graphics = not is_eval if "no_graphics" not in cfg["env"] else cfg["env"]["no_graphics"]
+        if is_eval:
+            time_scale = cfg["env"].get("eval_time_scale", 20.0 if cfg["env"].get("no_graphics", True) else 1.0)
+            no_graphics = cfg["env"].get("no_graphics", True)
+        else:
+            time_scale = cfg["env"].get("time_scale", 20.0)
+            no_graphics = cfg["env"].get("no_graphics", True)
         venv: VecEnv = make_unity_vec_env(
             binary_path=cfg["env"]["binary_path"],
             scene_name=cfg["env"].get("scene_name", "Assets/ML-Agents/Examples/PushBlock/Scenes/PushBlock.unity"),
