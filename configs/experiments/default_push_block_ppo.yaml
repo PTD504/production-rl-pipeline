@@ -1,0 +1,35 @@
+# Experiment Configuration: Unity ML-Agents Push Block (Discrete Control)
+project_name: "production-rl-pipeline"
+experiment_name: "default_push_block_ppo"
+seed: 42
+
+env:
+  backend: "unity"
+  binary_path: "binaries/Startup/Startup.x86_64"
+  scene_name: "Assets/ML-Agents/Examples/PushBlock/Scenes/PushBlock.unity"
+  time_scale: 20.0
+  no_graphics: true
+  base_port: 5005
+  norm_obs: true
+  norm_reward: false # Sparse reward tasks benefit from keeping raw goal signal
+
+algorithm:
+  name: "PPO"
+  policy: "MlpPolicy"
+  learning_rate: 0.0003
+  n_steps: 128        # 32 parallel agents * 128 = 4096 rollout steps per update
+  batch_size: 128
+  n_epochs: 4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_range: 0.2
+  ent_coef: 0.01      # Non-zero entropy aids exploration to find the sparse goal
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+
+train:
+  total_timesteps: 500000
+  log_interval: 10
+  save_freq: 50000
+  eval_freq: 25000
+  eval_episodes: 16
