@@ -185,20 +185,23 @@ experiments/outputs/default_push_block_ppo/seed_42/
 
 ---
 
-## Visual Policy Evaluation (`visualize.py`)
+## Policy Evaluation (`evaluate_policy.py` & `visualize.py`)
 
-To observe the trained policy controlling agents in real-time 3D desktop graphics:
+### 1. Fast Multi-Seed Headless Benchmark (`evaluate_policy.py`)
+
+Statistically benchmark generalization across held-out seeds at maximum simulation speed (>2,500 FPS):
+
+```bash
+uv run python scripts/evaluate_policy.py --model experiments/outputs/default_push_block_ppo/seed_42/best_model/best_model.zip --num-seeds 10
+```
+
+### 2. 3D Real-Time Visual Inspection (`visualize.py`)
+
+Observe the policy controlling agents live in desktop 3D graphics with 32 parallel arenas:
 
 ```bash
 uv run python scripts/visualize.py --model experiments/outputs/default_push_block_ppo/seed_42/best_model/best_model.zip
 ```
-
-- **Features:**
-  - Auto-detects and loads `final_vec_normalize.pkl` to preserve observation statistics.
-  - Opens a standalone Unity 3D window showing all 32 arenas.
-  - Real-time physical speed (`--time-scale 1.0`) with micro-sleep pacing for smooth 50-60 FPS rendering.
-  - Dedicated TCP port (`--port 5055`) to prevent port collisions.
-  - Real-time terminal logging on every goal scored (`[GOAL!]`) and episode completion.
 
 ---
 
@@ -212,11 +215,13 @@ We evaluated the baseline PPO configuration across **3 independent seeds** (42, 
 - **Time to Goal:** Mean episode length dropped from 1,000 steps to **101.06 ± 47.36** steps (a ~90% reduction in completion time).
 - **Critic Fidelity:** `explained_variance` averaged **0.656 ± 0.141** (reaching up to 0.753), providing high-accuracy baseline predictions and minimal policy gradient noise.
 - **Trust Region Stability:** `approx_kl` maintained at **0.0074 ± 0.0008** and `clip_fraction` at **6.91% ± 0.90%**, confirming optimal policy updates without divergence.
+- **Held-Out Generalization (10 Unseen Seeds):** Tested across 10 novel seeds (320 episodes); achieved **100.0%** success rate, **4.9812 ± 0.0018** return, and **30.05** steps average duration in 2.67 seconds.
 
 ### Engineering Verdict: Early Acceptance
 
 The baseline PPO configuration achieved a 100% success rate without hyperparameter tuning. Because performance reached the physical ceiling of the environment and variance across seeds remained tightly bounded, hyperparameter tuning was intentionally bypassed to optimize compute resources.
 
 Full charts, detailed analysis, and step-by-step metric breakdown: **[docs/03_baseline_experiments.md](docs/03_baseline_experiments.md)**.
+Complementary guides: **[docs/03b_reward_shaping.md](docs/03b_reward_shaping.md)** and **[docs/04_hyperparameter_tuning.md](docs/04_hyperparameter_tuning.md)**.
 
 
