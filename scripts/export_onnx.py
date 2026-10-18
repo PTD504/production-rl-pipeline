@@ -306,6 +306,7 @@ def main():
             "action_logits": {0: "batch_size"},
         },
         opset_version=args.opset,
+        external_data=False,
     )
 
     # Validate ONNX model integrity

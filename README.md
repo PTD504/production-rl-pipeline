@@ -197,10 +197,14 @@ uv run python scripts/evaluate_policy.py --model experiments/outputs/default_pus
 
 ### 2. 3D Real-Time Visual Inspection (`visualize.py`)
 
-Observe the policy controlling agents live in desktop 3D graphics with 32 parallel arenas:
+Observe the policy controlling agents live in desktop 3D graphics (supports both PyTorch `.zip` and standalone `.onnx` models):
 
 ```bash
+# Evaluate using PyTorch checkpoint
 uv run python scripts/visualize.py --model experiments/outputs/default_push_block_ppo/seed_42/best_model/best_model.zip
+
+# Or evaluate directly using production ONNX Runtime (zero PyTorch dependency)
+uv run python scripts/visualize.py --onnx models/push_block_policy.onnx
 ```
 
 ---
@@ -223,5 +227,29 @@ The baseline PPO configuration achieved a 100% success rate without hyperparamet
 
 Full charts, detailed analysis, and step-by-step metric breakdown: **[docs/03_baseline_experiments.md](docs/03_baseline_experiments.md)**.
 Complementary guides: **[docs/03b_reward_shaping.md](docs/03b_reward_shaping.md)** and **[docs/04_hyperparameter_tuning.md](docs/04_hyperparameter_tuning.md)**.
+
+---
+
+## Phase 5: Production Deployment & ONNX Export (`export_onnx.py`)
+
+To deploy trained policies into real-world applications (Unity game engine, C# runtime, embedded robotics, or C++ microservices) without Python/PyTorch dependencies, the pipeline packages models into the **ONNX** format.
+
+### 1. Export Command & Verification
+
+```bash
+uv run python scripts/export_onnx.py \
+  --model experiments/outputs/default_push_block_ppo/seed_42/best_model/best_model.zip \
+  --output models/push_block_policy.onnx
+```
+
+### 2. Key Packaging Highlights
+
+- **Fused Normalization:** Running mean ($\mu$) and variance ($\sigma^2$) are baked directly into the ONNX graph as constant tensor buffers. Downstream clients pass raw sensor raycasts $[0.0, 1.0]$ without writing custom normalization logic.
+- **Critic Pruning & Self-Contained Binary:** Discards the Value network and optimizer states, packaging weights and graph into a single **84.57 KB** file (>99.99% smaller than Python/PyTorch runtime).
+- **Mathematical Parity:** Verified across PyTorch and ONNX Runtime with a max logit discrepancy of **$1.70 \times 10^{-6}$** and **100.00%** action match agreement.
+- **Sub-Millisecond Latency:** Evaluated at **0.008 ms** (8 microseconds) mean latency on a single CPU core (~125,000 inferences/sec), consuming <0.05% of a 60 FPS frame budget.
+
+Detailed deployment architecture and integration examples: **[docs/05_model_export_onnx.md](docs/05_model_export_onnx.md)**.
+
 
 
