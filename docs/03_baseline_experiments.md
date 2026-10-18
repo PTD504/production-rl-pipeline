@@ -74,7 +74,7 @@ To guarantee scientific rigor and reproducibility, we report both individual see
 
 ### 1. Multi-Seed Comparison Table
 
-| Metric | Seed 1 | Seed 2 | Seed 3 | Aggregated ($\text{Mean} \pm \text{Std}$) |
+| Metric | Seed 1 (2024) | Seed 2 (100) | Seed 3 (42) | Aggregated ($\text{Mean} \pm \text{Std}$) |
 | :--- | :---: | :---: | :---: | :---: |
 | `eval/mean_reward` | 4.6040 | 4.5907 | 4.9714 | **4.7220 ± 0.2160** |
 | `eval/mean_ep_length` | 130.69 | 126.06 | 46.44 | **101.06 ± 47.36** |
