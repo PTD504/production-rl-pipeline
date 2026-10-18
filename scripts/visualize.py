@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
         help="Path to trained model .zip file.",
     )
     parser.add_argument(
+        "--onnx",
+        type=str,
+        default=None,
+        help="Path to exported ONNX model (.onnx). If provided, runs directly via ONNX Runtime without PyTorch.",
+    )
+    parser.add_argument(
         "--vec-normalize",
         type=str,
         default=None,
@@ -94,17 +100,26 @@ def find_vec_normalize_path(model_path: Path) -> Optional[Path]:
 def main():
     args = parse_args()
 
-    model_path = Path(args.model).resolve()
-    if not model_path.exists():
-        # Fallback check for final_model.zip
-        fallback = model_path.parent.parent / "final_model.zip"
-        if fallback.exists():
-            model_path = fallback
-        else:
-            raise FileNotFoundError(f"Model file not found at: {model_path}")
+    is_onnx = bool(args.onnx or (args.model and args.model.endswith(".onnx")))
+    onnx_path = Path(args.onnx or args.model).resolve() if is_onnx else None
 
-    # Auto-detect VecNormalize stats
-    vec_norm_path = Path(args.vec_normalize).resolve() if args.vec_normalize else find_vec_normalize_path(model_path)
+    if not is_onnx:
+        model_path = Path(args.model).resolve()
+        if not model_path.exists():
+            # Fallback check for final_model.zip
+            fallback = model_path.parent.parent / "final_model.zip"
+            if fallback.exists():
+                model_path = fallback
+            else:
+                raise FileNotFoundError(f"Model file not found at: {model_path}")
+
+        # Auto-detect VecNormalize stats
+        vec_norm_path = Path(args.vec_normalize).resolve() if args.vec_normalize else find_vec_normalize_path(model_path)
+    else:
+        if not onnx_path.exists():
+            raise FileNotFoundError(f"ONNX model file not found at: {onnx_path}")
+        model_path = onnx_path
+        vec_norm_path = None
 
     # Load environment config
     with open(args.config, "r", encoding="utf-8") as f:
@@ -119,8 +134,9 @@ def main():
     print("=" * 70)
     print("VISUAL POLICY EVALUATION: PUSH BLOCK")
     print("=" * 70)
+    print(f"  - Engine           : {'ONNX Runtime (Standalone Model)' if is_onnx else 'Stable-Baselines3 (PyTorch)'}")
     print(f"  - Model Path       : {model_path}")
-    print(f"  - Normalization    : {vec_norm_path if vec_norm_path else 'None (Raw observations)'}")
+    print(f"  - Normalization    : {'Embedded in ONNX Graph (Fused)' if is_onnx else (vec_norm_path.name if vec_norm_path else 'None (Raw observations)')}")
     print(f"  - GUI Window       : {'Enabled (Desktop Screen)' if not no_graphics else 'Headless'}")
     print(f"  - Time Scale       : {time_scale}x (Real-time physical speed)")
     print(f"  - Dedicated Port   : {args.port}")
@@ -141,18 +157,34 @@ def main():
             seed=seed,
         )
 
-        if vec_norm_path and vec_norm_path.exists():
-            print(f"[INFO] Loading observation normalization statistics from: {vec_norm_path.name}")
-            env = VecNormalize.load(str(vec_norm_path), raw_env)
-            env.training = False
-            env.norm_reward = False
-        else:
-            print("[WARN] No VecNormalize file found; using raw observations.")
-            env = raw_env
+        session = None
+        model = None
 
-        print(f"[INFO] Loading trained PPO policy from: {model_path.name}")
-        model = PPO.load(str(model_path), env=env)
-        print("[INFO] Policy loaded successfully. Starting live demonstration...")
+        if is_onnx:
+            import onnxruntime as ort
+
+            print(f"[INFO] Initializing ONNX Runtime Session from: {onnx_path.name}")
+            opts = ort.SessionOptions()
+            opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            session = ort.InferenceSession(str(onnx_path), opts, providers=["CPUExecutionProvider"])
+            input_name = session.get_inputs()[0].name
+            # Standalone ONNX model already has fused observation normalization, so it operates on raw observations directly
+            env = raw_env
+            print("[INFO] ONNX model loaded (fused normalization). Starting live demonstration...")
+        else:
+            if vec_norm_path and vec_norm_path.exists():
+                print(f"[INFO] Loading observation normalization statistics from: {vec_norm_path.name}")
+                env = VecNormalize.load(str(vec_norm_path), raw_env)
+                env.training = False
+                env.norm_reward = False
+            else:
+                print("[WARN] No VecNormalize file found; using raw observations.")
+                env = raw_env
+
+            print(f"[INFO] Loading trained PPO policy from: {model_path.name}")
+            model = PPO.load(str(model_path), env=env)
+            print("[INFO] Policy loaded successfully. Starting live demonstration...")
+
         print("-" * 70)
 
         obs = env.reset()
@@ -162,7 +194,12 @@ def main():
 
         for step in range(args.steps):
             # Predict action from trained policy
-            actions, _ = model.predict(obs, deterministic=args.deterministic)
+            if is_onnx:
+                outputs = session.run(None, {input_name: obs.astype(np.float32)})
+                actions = outputs[0]
+            else:
+                actions, _ = model.predict(obs, deterministic=args.deterministic)
+
             obs, rewards, dones, infos = env.step(actions)
 
             cumulative_rewards += rewards
