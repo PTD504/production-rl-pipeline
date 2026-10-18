@@ -171,7 +171,10 @@ def main():
                 job_type="train",
                 tags=["baseline" if "default" in experiment_name else "tuned", cfg["algorithm"]["name"].lower()],
             )
-            print(f"[INFO] Weights & Biases initialized: Group='{wandb_group}' | Name='{run_name}'")
+            # Define global_step as the default x-axis for all logged metrics
+            wandb.define_metric("global_step")
+            wandb.define_metric("*", step_metric="global_step")
+            print(f"[INFO] Weights & Biases initialized: Group='{wandb_group}' | Name='{run_name}' (X-axis: global_step)")
         except Exception as e:
             print(f"[WARN] Failed to initialize Weights & Biases ({e}). Continuing with local logging only.")
             wandb_run = None
