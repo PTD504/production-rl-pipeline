@@ -20,9 +20,10 @@ if str(PROJECT_ROOT) not in sys.path:
 import numpy as np
 import torch
 import yaml
-from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback, EvalCallback
 from stable_baselines3.common.vec_env import VecNormalize
+
+from src.algorithms.factory import build_algorithm
 
 from src.envs.registry import build_vec_env
 from src.utils.seed import set_seed
@@ -205,33 +206,17 @@ def main():
         else:
             print("\n[2/4] Dedicated Evaluation Environment disabled.")
 
-        # 7. Initialize Algorithm (PPO)
+        # 7. Initialize Algorithm via Factory
         print("\n[3/4] Constructing Algorithm Policy & Optimizer...")
-        algo_name = cfg["algorithm"]["name"].upper()
-        if algo_name != "PPO":
-            raise ValueError(f"Algorithm '{algo_name}' is not supported yet in train.py (expected 'PPO').")
-
         tb_log_dir = str(output_dir / "tensorboard")
-
-        model = PPO(
-            policy=cfg["algorithm"].get("policy", "MlpPolicy"),
+        model = build_algorithm(
+            cfg=cfg,
             env=train_env,
-            learning_rate=cfg["algorithm"].get("learning_rate", 3e-4),
-            n_steps=cfg["algorithm"].get("n_steps", 128),
-            batch_size=cfg["algorithm"].get("batch_size", 128),
-            n_epochs=cfg["algorithm"].get("n_epochs", 4),
-            gamma=cfg["algorithm"].get("gamma", 0.99),
-            gae_lambda=cfg["algorithm"].get("gae_lambda", 0.95),
-            clip_range=cfg["algorithm"].get("clip_range", 0.2),
-            ent_coef=cfg["algorithm"].get("ent_coef", 0.01),
-            vf_coef=cfg["algorithm"].get("vf_coef", 0.5),
-            max_grad_norm=cfg["algorithm"].get("max_grad_norm", 0.5),
-            tensorboard_log=tb_log_dir,
+            tb_log_dir=tb_log_dir,
             device=args.device,
             seed=seed,
             verbose=1,
         )
-        print("  [INFO] PPO Policy initialized with configured hyperparameters.")
 
         # 8. Setup Callbacks
         print("\n[4/4] Configuring Callbacks (Checkpoints, Evaluation, WandB)...")
