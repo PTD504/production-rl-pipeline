@@ -16,6 +16,7 @@ logs/
 wandb/
 tensorboard/
 experiments/
+!configs/experiments/
 *.log
 
 # Checkpoints, weights & models

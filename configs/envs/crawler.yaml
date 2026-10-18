@@ -1,0 +1,14 @@
+# Environment Configuration: Unity ML-Agents Crawler (Complex Continuous Locomotion)
+project_name: "production-rl-pipeline"
+seed: 42
+
+env:
+  name: "Crawler"
+  backend: "unity"
+  binary_path: "binaries/Startup/Startup.x86_64"
+  scene_name: "Assets/ML-Agents/Examples/Crawler/Scenes/Crawler.unity"
+  time_scale: 20.0
+  no_graphics: true
+  base_port: 5050
+  norm_obs: false      # Profiling mode: raw observation values
+  norm_reward: false   # Profiling mode: raw environment rewards
