@@ -1,0 +1,39 @@
+project_name: production-rl-pipeline
+experiment_name: tuned_crawler_sac
+seed: 42
+env:
+  backend: unity
+  binary_path: binaries/Startup/Startup.x86_64
+  scene_name: Assets/ML-Agents/Examples/Crawler/Scenes/Crawler.unity
+  time_scale: 20.0
+  no_graphics: true
+  base_port: 5050
+  norm_obs: true
+  norm_reward: false
+  clip_obs: 10.0
+  clip_reward: 10.0
+algorithm:
+  name: SAC
+  policy: MlpPolicy
+  learning_rate: 0.00020726363966792186
+  buffer_size: 300000
+  learning_starts: 10000
+  batch_size: 128
+  tau: 0.005
+  gamma: 0.99
+  train_freq: 1
+  gradient_steps: -1
+  ent_coef: auto
+  target_update_interval: 1
+  target_entropy: -10.0
+  policy_kwargs:
+    net_arch:
+    - 256
+    - 256
+train:
+  total_timesteps: 1000000
+  save_freq: 100000
+  eval_freq: 50000
+  eval_episodes: 10
+  enable_eval: true
+  enable_wandb: true
