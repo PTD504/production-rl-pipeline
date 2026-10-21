@@ -19,21 +19,21 @@ algorithm:
   name: "SAC"
   policy: "MlpPolicy"
   learning_rate: 0.0003
-  buffer_size: 1000000
+  buffer_size: 300000
   learning_starts: 10000
-  batch_size: 256
+  batch_size: 128
   tau: 0.005
   gamma: 0.99
   train_freq: 1
-  gradient_steps: 1
+  gradient_steps: -1
   ent_coef: "auto"
   target_update_interval: 1
   target_entropy: "auto"
 
 train:
-  total_timesteps: 2000000
+  total_timesteps: 500000
   save_freq: 100000
   eval_freq: 50000
-  eval_episodes: 16
+  eval_episodes: 10
   enable_eval: true
   enable_wandb: true

@@ -19,9 +19,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import numpy as np
 import yaml
-from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize
 
+from src.algorithms.factory import ALGORITHM_REGISTRY
 from src.envs.unity_wrapper import make_unity_vec_env
 from src.utils.seed import set_seed
 
@@ -76,10 +76,9 @@ def parse_args() -> argparse.Namespace:
         help="Maximum timesteps to visualize.",
     )
     parser.add_argument(
-        "--deterministic",
+        "--stochastic",
         action="store_true",
-        default=True,
-        help="Use deterministic policy predictions (highest probability actions).",
+        help="Sample actions stochastically from policy distribution instead of taking deterministic mean.",
     )
     return parser.parse_args()
 
@@ -131,8 +130,9 @@ def main():
     no_graphics = args.no_gui
     time_scale = args.time_scale
 
+    exp_name = cfg.get("experiment_name", cfg.get("env", {}).get("name", "RL Agent"))
     print("=" * 70)
-    print("VISUAL POLICY EVALUATION: PUSH BLOCK")
+    print(f"VISUAL POLICY EVALUATION: {exp_name.upper()}")
     print("=" * 70)
     print(f"  - Engine           : {'ONNX Runtime (Standalone Model)' if is_onnx else 'Stable-Baselines3 (PyTorch)'}")
     print(f"  - Model Path       : {model_path}")
@@ -181,9 +181,22 @@ def main():
                 print("[WARN] No VecNormalize file found; using raw observations.")
                 env = raw_env
 
-            print(f"[INFO] Loading trained PPO policy from: {model_path.name}")
-            model = PPO.load(str(model_path), env=env)
-            print("[INFO] Policy loaded successfully. Starting live demonstration...")
+            algo_name = cfg.get("algorithm", {}).get("name")
+            if not algo_name:
+                if "sac" in str(model_path).lower():
+                    algo_name = "SAC"
+                elif "td3" in str(model_path).lower():
+                    algo_name = "TD3"
+                else:
+                    algo_name = "PPO"
+            algo_name = algo_name.upper()
+            algo_cls = ALGORITHM_REGISTRY.get(algo_name)
+            if algo_cls is None:
+                raise ValueError(f"Algorithm '{algo_name}' not supported for visualization. Available: {list(ALGORITHM_REGISTRY.keys())}")
+
+            print(f"[INFO] Loading trained {algo_name} policy from: {model_path.name}")
+            model = algo_cls.load(str(model_path), env=env)
+            print(f"[INFO] {algo_name} Policy loaded successfully. Starting live demonstration...")
 
         print("-" * 70)
 
@@ -198,23 +211,29 @@ def main():
                 outputs = session.run(None, {input_name: obs.astype(np.float32)})
                 actions = outputs[0]
             else:
-                actions, _ = model.predict(obs, deterministic=args.deterministic)
+                actions, _ = model.predict(obs, deterministic=not args.stochastic)
 
             obs, rewards, dones, infos = env.step(actions)
 
             cumulative_rewards += rewards
-            # Detect goal triggers (reward > 1.0)
-            step_goals = int(np.sum(rewards > 1.0))
-            if step_goals > 0:
-                goals_reached += step_goals
-                print(f"[GOAL!] Step {step + 1:4d} | Arena scored a goal! Total Goals: {goals_reached}")
+            is_push_block = "pushblock" in cfg.get("env", {}).get("scene_name", "").lower()
+
+            # Detect goal triggers for goal-reaching environments like PushBlock
+            if is_push_block:
+                step_goals = int(np.sum(rewards > 1.0))
+                if step_goals > 0:
+                    goals_reached += step_goals
+                    print(f"[GOAL!] Step {step + 1:4d} | Arena scored a goal! Total Goals: {goals_reached}")
 
             for i, done in enumerate(dones):
                 if done:
                     episodes_completed += 1
                     ep_return = float(cumulative_rewards[i])
                     cumulative_rewards[i] = 0.0
-                    print(f"[EPISODE COMPLETED] Episode {episodes_completed:3d} (Arena {i:2d}) | Return: {ep_return:+.3f} | Total Goals: {goals_reached}")
+                    if is_push_block:
+                        print(f"[EPISODE COMPLETED] Episode {episodes_completed:3d} (Arena {i:2d}) | Return: {ep_return:+.3f} | Total Goals: {goals_reached}")
+                    else:
+                        print(f"[EPISODE COMPLETED] Episode {episodes_completed:3d} (Arena {i:2d}) | Return: {ep_return:+.3f} | Step: {step + 1}")
 
             # Sleep slightly if real-time GUI mode to ensure silky smooth 50-60 FPS visual rendering
             if not no_graphics and time_scale <= 1.0:
@@ -222,7 +241,8 @@ def main():
 
         print("-" * 70)
         print("[INFO] Live demonstration completed.")
-        print(f"  - Total Goals Scored  : {goals_reached}")
+        if is_push_block:
+            print(f"  - Total Goals Scored  : {goals_reached}")
         print(f"  - Episodes Completed  : {episodes_completed}")
         print("=" * 70)
 

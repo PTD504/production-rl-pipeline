@@ -123,4 +123,4 @@ For high-dimensional 20-DOF quadruped locomotion in Crawler:
 - **Primary Algorithm:** **Soft Actor-Critic (SAC)** is selected as our core off-policy continuous control engine, leveraging maximum entropy exploration and dual Q-critics to learn high-speed coordinated gaits without manual noise tuning.
 - **Reference / Alternative Engine:** **PPO (Continuous Gaussian Policy)** remains available as our battle-tested on-policy baseline, allowing direct empirical comparison between on-policy and off-policy scaling in Phase 3.
 
-We proceed to **[03_training_experiments.md](03_training_experiments.md)** to configure hyperparameters, establish training pipelines, and evaluate empirical performance.
+We proceed to **[03_baseline_experiments.md](03_baseline_experiments.md)** to configure hyperparameters, establish training pipelines, and evaluate empirical performance.
