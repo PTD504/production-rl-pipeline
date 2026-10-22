@@ -20,9 +20,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import numpy as np
 import yaml
-from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import VecNormalize
 
+from src.algorithms.factory import ALGORITHM_REGISTRY
 from src.envs.unity_wrapper import make_unity_vec_env
 from src.utils.seed import set_seed
 
@@ -113,11 +113,12 @@ def find_vec_normalize_path(model_path: Path) -> Optional[Path]:
 
 
 def run_evaluation_for_seed(
-    model: PPO,
+    model: Any,
     env: VecNormalize,
     seed: int,
     target_episodes: int,
     deterministic: bool = True,
+    is_push_block: bool = False,
 ) -> Dict[str, Any]:
     """Evaluate a policy on a specific seed until target_episodes are completed."""
     # Seed the vectorized environment
@@ -147,8 +148,12 @@ def run_evaluation_for_seed(
             if done and len(episode_returns) < target_episodes:
                 ret = float(current_returns[i])
                 length = int(current_lengths[i])
-                # In Push Block, goal gives +5.0, so a return > 1.0 indicates task success
-                success = bool(ret > 1.0)
+                if is_push_block:
+                    # In Push Block, goal gives +5.0, so a return > 1.0 indicates task success
+                    success = bool(ret > 1.0)
+                else:
+                    # In Crawler (continuous locomotion), staying upright without early collapse
+                    success = bool(ret > 0.0 and length >= 500)
 
                 episode_returns.append(ret)
                 episode_lengths.append(length)
@@ -237,9 +242,23 @@ def main():
             print("[WARN] No VecNormalize statistics found; evaluating raw observations.")
             env = raw_env
 
-        print(f"[INFO] Loading PPO policy weights: {model_path.name}")
-        model = PPO.load(str(model_path), env=env)
-        print("[INFO] Policy loaded successfully. Starting evaluation across seeds...")
+        # Detect algorithm class dynamically
+        algo_name = cfg.get("algorithm", {}).get("name")
+        if not algo_name:
+            if "sac" in str(model_path).lower():
+                algo_name = "SAC"
+            elif "td3" in str(model_path).lower():
+                algo_name = "TD3"
+            else:
+                algo_name = "PPO"
+        algo_name = algo_name.upper()
+        algo_cls = ALGORITHM_REGISTRY.get(algo_name)
+        if algo_cls is None:
+            raise ValueError(f"Algorithm '{algo_name}' not supported. Available: {list(ALGORITHM_REGISTRY.keys())}")
+
+        print(f"[INFO] Loading {algo_name} policy weights: {model_path.name}")
+        model = algo_cls.load(str(model_path), env=env)
+        print(f"[INFO] {algo_name} policy loaded successfully. Starting evaluation across seeds...")
         print("-" * 75)
 
         start_time = time.perf_counter()
@@ -248,6 +267,7 @@ def main():
         print(f"{'Seed':<8} | {'Episodes':<8} | {'Mean Reward':<16} | {'Mean Ep Length':<16} | {'Success Rate':<12}")
         print("-" * 75)
 
+        is_push_block = "pushblock" in cfg.get("env", {}).get("scene_name", "").lower()
         for seed in test_seeds:
             seed_start_t = time.perf_counter()
             res = run_evaluation_for_seed(
@@ -256,6 +276,7 @@ def main():
                 seed=seed,
                 target_episodes=args.episodes_per_seed,
                 deterministic=args.deterministic,
+                is_push_block=is_push_block,
             )
             seed_elapsed = time.perf_counter() - seed_start_t
             seed_results.append(res)
