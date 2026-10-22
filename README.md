@@ -22,6 +22,14 @@ This repository provides an end-to-end, reproducible RL engineering framework de
 - **Rewards:** Sparse positive reward (`+5.0`) on goal completion, small per-step negative penalty (`-0.001`) to encourage speed.
 - **Multi-Arena Scaling:** Wrapped via `UnityToSB3VecEnv`, utilizing **32 parallel arenas** running inside a single Unity engine process to maximize data collection throughput without multi-window overhead.
 
+### 2. Unity ML-Agents: Crawler
+- **Domain:** Continuous high-dimensional quadruped locomotion control (robotics).
+- **Task:** A 4-legged agent must learn a coordinated, dynamic gait to run forward as quickly as possible without losing balance or collapsing.
+- **Action Space:** `Box(-1.0, 1.0, (20,))` (20 continuous motor torques controlling 4 articulated limbs).
+- **Observation Space:** 158-dimensional continuous vector (body orientations, angular velocities, joint positions/velocities, floor contact raycasts).
+- **Rewards:** Dense composite reward for forward velocity, target alignment, and torso upright stability with small joint action penalties.
+- **Multi-Arena Scaling:** Utilizing **10 parallel arenas** running inside a single Unity process.
+
 ---
 
 ## Getting Started & Testing
@@ -245,11 +253,26 @@ uv run python scripts/export_onnx.py \
 ### 2. Key Packaging Highlights
 
 - **Fused Normalization:** Running mean ($\mu$) and variance ($\sigma^2$) are baked directly into the ONNX graph as constant tensor buffers. Downstream clients pass raw sensor raycasts $[0.0, 1.0]$ without writing custom normalization logic.
-- **Critic Pruning & Self-Contained Binary:** Discards the Value network and optimizer states, packaging weights and graph into a single **84.57 KB** file (>99.99% smaller than Python/PyTorch runtime).
+- **Critic Pruning & Self-Contained Binary:** Discards the Value network and optimizer states, reducing artifact size from 525 KB to **74.27 KB** (-85.9% reduction) with zero external dependency on PyTorch.
 - **Mathematical Parity:** Verified across PyTorch and ONNX Runtime with a max logit discrepancy of **$1.70 \times 10^{-6}$** and **100.00%** action match agreement.
 - **Sub-Millisecond Latency:** Evaluated at **0.008 ms** (8 microseconds) mean latency on a single CPU core (~125,000 inferences/sec), consuming <0.05% of a 60 FPS frame budget.
 
 Detailed deployment architecture and integration examples: **[docs/05_model_export_onnx.md](docs/05_model_export_onnx.md)**.
+
+---
+
+## Case Study 2: Continuous Quadruped Locomotion (Crawler)
+
+Case Study 2 tackles high-dimensional continuous control for a 20-DOF quadruped robot across a complete 6-phase engineering lifecycle:
+
+| Phase | Engineering Focus | Documentation & Artifacts | Key Result |
+| :---: | :--- | :--- | :--- |
+| **0** | **MDP Modeling** | **[01_mdp_modeling.md](docs/crawler/01_mdp_modeling.md)** | Formulated $\mathcal{S} \in \mathbb{R}^{158}$, $\mathcal{A} \in [-1, 1]^{20}$, and reward formulation. |
+| **1** | **Algorithm Selection** | **[02_algorithm_selection.md](docs/crawler/02_algorithm_selection.md)** | Selected Soft Actor-Critic (SAC) to prevent local gait entrapment. |
+| **2** | **Baseline Experiments** | **[03_baseline_experiments.md](docs/crawler/03_baseline_experiments.md)** | SAC 500k steps reached $+742.05 \pm 1,107.30$ (vs. $-0.81$ random lower bound). |
+| **3** | **Hyperparameter Tuning** | **[04_hyperparameter_tuning.md](docs/crawler/04_hyperparameter_tuning.md)** | Optuna TPE tuned 10 trials; 1M steps reached $+1,175.18$ ($+1,408$ peak). |
+| **4** | **Multi-Seed Evaluation** | **[05_multi_seed_evaluation.md](docs/crawler/05_multi_seed_evaluation.md)** | 10 unseen seeds benchmark: **$+1,430.99 \pm 332.59$** ($+205\%$ surge), 10/10 seeds won. |
+| **5** | **ONNX Production Export** | **[06_onnx_packaging.md](docs/crawler/06_onnx_packaging.md)** | Fused normalization, 438 KB binary, MAE $9.76 \times 10^{-8}$, **$26\ \mu\text{s}$ latency**. |
 
 
 

@@ -1,7 +1,7 @@
 """ONNX Export and Production Packaging Script (export_onnx.py).
 
-Exports a trained Stable-Baselines3 PPO policy into a standalone, production-ready
-ONNX model with fused observation normalization (VecNormalize mean & std).
+Exports trained Stable-Baselines3 policies (PPO discrete, SAC continuous) into standalone,
+production-ready ONNX models with fused observation normalization (VecNormalize mean & std).
 Verifies numerical parity against PyTorch and benchmarks inference latency.
 """
 
@@ -9,20 +9,23 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import gymnasium.spaces as spaces
 import numpy as np
 import onnx
 import onnxruntime as ort
 import torch
 import torch.nn as nn
-from stable_baselines3 import PPO
+from stable_baselines3 import PPO, SAC, TD3
 from stable_baselines3.common.vec_env import VecNormalize
+
+from src.algorithms.factory import ALGORITHM_REGISTRY
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,8 +45,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=str,
-        default="models/push_block_policy.onnx",
-        help="Output path for exported ONNX model (default: models/push_block_policy.onnx).",
+        default=None,
+        help="Output path for exported ONNX model (default: models/<model_name>.onnx).",
     )
     parser.add_argument(
         "--opset",
@@ -78,15 +81,8 @@ def find_vec_normalize_path(model_path: Path) -> Optional[Path]:
     return None
 
 
-class StandalonePolicy(nn.Module):
-    """Production wrapper fusing observation normalization and policy network.
-
-    If mean and variance statistics are provided, they are registered as persistent
-    buffers so that the normalization transformation:
-        z = clamp((x - mean) / std, -clip_obs, clip_obs)
-    is embedded directly into the ONNX computational graph. This makes the model
-    fully self-contained for downstream clients (Unity Sentis, C#, C++, Microservices).
-    """
+class StandaloneDiscretePolicy(nn.Module):
+    """Production wrapper for discrete action policies (e.g. PPO on PushBlock)."""
 
     def __init__(
         self,
@@ -105,21 +101,11 @@ class StandalonePolicy(nn.Module):
         else:
             self.has_normalization = False
 
-        # Extract only Actor network components (discard Critic/Value network)
         self.features_extractor = policy.features_extractor
         self.mlp_policy_net = policy.mlp_extractor.policy_net
         self.action_net = policy.action_net
 
     def forward(self, obs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass.
-
-        Args:
-            obs: Observation tensor (shape: [batch_size, obs_dim]).
-
-        Returns:
-            discrete_action: Chosen action index with highest logit (shape: [batch_size]).
-            action_logits: Unnormalized logits for all actions (shape: [batch_size, num_actions]).
-        """
         if self.has_normalization:
             obs = torch.clamp((obs - self.obs_mean) / self.obs_std, -self.clip_obs, self.clip_obs)
 
@@ -130,50 +116,98 @@ class StandalonePolicy(nn.Module):
         return discrete_action, action_logits
 
 
+class StandaloneContinuousPolicy(nn.Module):
+    """Production wrapper for continuous action policies (e.g. SAC on Crawler)."""
+
+    def __init__(
+        self,
+        actor: nn.Module,
+        mean: Optional[np.ndarray] = None,
+        var: Optional[np.ndarray] = None,
+        epsilon: float = 1e-8,
+        clip_obs: float = 10.0,
+    ):
+        super().__init__()
+        if mean is not None and var is not None:
+            self.register_buffer("obs_mean", torch.tensor(mean, dtype=torch.float32).unsqueeze(0))
+            self.register_buffer("obs_std", torch.sqrt(torch.tensor(var, dtype=torch.float32) + epsilon).unsqueeze(0))
+            self.clip_obs = float(clip_obs)
+            self.has_normalization = True
+        else:
+            self.has_normalization = False
+
+        self.features_extractor = actor.features_extractor
+        self.latent_pi = actor.latent_pi
+        self.mu = actor.mu
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        if self.has_normalization:
+            obs = torch.clamp((obs - self.obs_mean) / self.obs_std, -self.clip_obs, self.clip_obs)
+
+        features = self.features_extractor(obs)
+        latent = self.latent_pi(features)
+        mean_actions = self.mu(latent)
+        # Squeeze through tanh activation into [-1.0, 1.0] motor bounds
+        continuous_action = torch.tanh(mean_actions)
+        return continuous_action
+
+
 def verify_numerical_parity(
     torch_model: nn.Module,
     onnx_path: Path,
     obs_dim: int,
+    is_continuous: bool = False,
     num_samples: int = 100,
     tolerance: float = 1e-5,
 ) -> bool:
     """Verifies that PyTorch and ONNX Runtime produce identical outputs."""
     print("\n[VERIFICATION] Running Numerical Parity Check...")
 
-    # Load ONNX Runtime session
     opts = ort.SessionOptions()
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     session = ort.InferenceSession(str(onnx_path), opts, providers=["CPUExecutionProvider"])
 
-    # Generate synthetic observations spanning diverse ranges
-    test_obs = np.random.uniform(low=0.0, high=1.0, size=(num_samples, obs_dim)).astype(np.float32)
+    test_obs = np.random.uniform(low=-1.0, high=1.0, size=(num_samples, obs_dim)).astype(np.float32)
 
-    # 1. PyTorch inference
     torch_model.eval()
     with torch.no_grad():
-        pt_actions, pt_logits = torch_model(torch.from_numpy(test_obs))
-        pt_actions_np = pt_actions.numpy()
-        pt_logits_np = pt_logits.numpy()
+        if is_continuous:
+            pt_action = torch_model(torch.from_numpy(test_obs)).numpy()
+        else:
+            pt_actions, pt_logits = torch_model(torch.from_numpy(test_obs))
+            pt_actions_np = pt_actions.numpy()
+            pt_logits_np = pt_logits.numpy()
 
-    # 2. ONNX Runtime inference
     ort_inputs = {"obs": test_obs}
-    ort_actions_np, ort_logits_np = session.run(None, ort_inputs)
+    ort_outputs = session.run(None, ort_inputs)
 
-    # Compare logits and action predictions
-    max_logit_diff = float(np.max(np.abs(pt_logits_np - ort_logits_np)))
-    action_match_rate = float(np.mean(pt_actions_np == ort_actions_np)) * 100.0
+    if is_continuous:
+        ort_action = ort_outputs[0]
+        max_diff = float(np.max(np.abs(pt_action - ort_action)))
+        mean_diff = float(np.mean(np.abs(pt_action - ort_action)))
 
-    print(f"  - Test Samples Evaluated : {num_samples}")
-    print(f"  - Maximum Logit Difference: {max_logit_diff:.8e}")
-    print(f"  - Action Match Agreement : {action_match_rate:.2f}%")
+        print(f"  - Test Samples Evaluated : {num_samples}")
+        print(f"  - Mean Absolute Error (MAE): {mean_diff:.8e}")
+        print(f"  - Maximum Absolute Error   : {max_diff:.8e}")
 
-    if max_logit_diff > tolerance:
-        print(f"[FAIL] Numerical parity check failed: logit difference {max_logit_diff} exceeds tolerance {tolerance}.")
-        return False
+        if max_diff > tolerance:
+            print(f"[FAIL] Numerical parity check failed: difference {max_diff} exceeds tolerance {tolerance}.")
+            return False
+    else:
+        ort_actions_np, ort_logits_np = ort_outputs
+        max_logit_diff = float(np.max(np.abs(pt_logits_np - ort_logits_np)))
+        action_match_rate = float(np.mean(pt_actions_np == ort_actions_np)) * 100.0
 
-    if action_match_rate < 100.0:
-        print(f"[FAIL] Discrete action mismatch between PyTorch and ONNX Runtime ({action_match_rate}%).")
-        return False
+        print(f"  - Test Samples Evaluated : {num_samples}")
+        print(f"  - Maximum Logit Difference: {max_logit_diff:.8e}")
+        print(f"  - Action Match Agreement : {action_match_rate:.2f}%")
+
+        if max_logit_diff > tolerance:
+            print(f"[FAIL] Numerical parity check failed: logit difference {max_logit_diff} exceeds tolerance {tolerance}.")
+            return False
+        if action_match_rate < 100.0:
+            print(f"[FAIL] Discrete action mismatch between PyTorch and ONNX Runtime ({action_match_rate}%).")
+            return False
 
     print(f"[PASS] Numerical parity verified successfully (tolerance < {tolerance}).")
     return True
@@ -193,7 +227,7 @@ def benchmark_inference_latency(
     opts.intra_op_num_threads = 1
     session = ort.InferenceSession(str(onnx_path), opts, providers=["CPUExecutionProvider"])
 
-    single_obs = np.random.uniform(0.0, 1.0, size=(1, obs_dim)).astype(np.float32)
+    single_obs = np.random.uniform(-1.0, 1.0, size=(1, obs_dim)).astype(np.float32)
     inputs = {"obs": single_obs}
 
     # Warmup
@@ -206,7 +240,7 @@ def benchmark_inference_latency(
         t0 = time.perf_counter()
         session.run(None, inputs)
         t1 = time.perf_counter()
-        latencies.append((t1 - t0) * 1000.0)  # Convert to milliseconds
+        latencies.append((t1 - t0) * 1000.0)
 
     latencies_arr = np.array(latencies)
     mean_lat = np.mean(latencies_arr)
@@ -234,14 +268,32 @@ def main():
         else:
             raise FileNotFoundError(f"Model file not found at: {model_path}")
 
-    output_path = Path(args.output).resolve()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Determine algorithm and architecture
+    model_str = str(model_path).lower()
+    if "sac" in model_str:
+        algo_cls = SAC
+        algo_name = "SAC"
+    elif "td3" in model_str:
+        algo_cls = TD3
+        algo_name = "TD3"
+    else:
+        algo_cls = PPO
+        algo_name = "PPO"
 
+    # Default output path based on model name
+    if args.output is not None:
+        output_path = Path(args.output).resolve()
+    else:
+        out_name = "crawler_policy.onnx" if "crawler" in model_str else "push_block_policy.onnx"
+        output_path = PROJECT_ROOT / "models" / out_name
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     vec_norm_path = Path(args.vec_normalize).resolve() if args.vec_normalize else find_vec_normalize_path(model_path)
 
     print("=" * 70)
     print("PRODUCTION RL PIPELINE: ONNX MODEL EXPORT")
     print("=" * 70)
+    print(f"  - Algorithm           : {algo_name}")
     print(f"  - Source Model        : {model_path}")
     print(f"  - Normalization File  : {vec_norm_path if vec_norm_path else 'None'}")
     print(f"  - Fuse Normalization  : {'Enabled (Self-Contained Graph)' if not args.no_fuse_norm else 'Disabled'}")
@@ -250,13 +302,20 @@ def main():
     print("=" * 70)
 
     # 1. Load PyTorch model
-    print("\n[1/4] Loading trained PyTorch policy...")
-    model = PPO.load(str(model_path), device="cpu")
-    policy = model.policy
+    print(f"\n[1/4] Loading trained PyTorch {algo_name} policy...")
+    model = algo_cls.load(str(model_path), device="cpu")
 
-    # Extract observation and action dimensions
-    obs_dim = int(policy.observation_space.shape[0])
-    num_actions = int(policy.action_space.n)
+    # Determine action space type
+    action_space = model.action_space
+    is_continuous = isinstance(action_space, spaces.Box)
+    obs_dim = int(model.observation_space.shape[0])
+
+    if is_continuous:
+        action_dim = int(action_space.shape[0])
+        print(f"  - Continuous Control Action Space (dim={action_dim}, range=[{action_space.low[0]}, {action_space.high[0]}])")
+    else:
+        num_actions = int(action_space.n)
+        print(f"  - Discrete Action Space ({num_actions} categorical choices)")
 
     # 2. Extract Normalization Statistics (if applicable)
     mean = None
@@ -281,13 +340,36 @@ def main():
 
     # 3. Construct Standalone Policy Wrapper
     print("\n[2/4] Assembling standalone production policy graph...")
-    export_model = StandalonePolicy(
-        policy=policy,
-        mean=mean,
-        var=var,
-        epsilon=epsilon,
-        clip_obs=clip_obs,
-    )
+    if is_continuous:
+        export_model = StandaloneContinuousPolicy(
+            actor=model.actor,
+            mean=mean,
+            var=var,
+            epsilon=epsilon,
+            clip_obs=clip_obs,
+        )
+        input_names = ["obs"]
+        output_names = ["continuous_action"]
+        dynamic_axes = {
+            "obs": {0: "batch_size"},
+            "continuous_action": {0: "batch_size"},
+        }
+    else:
+        export_model = StandaloneDiscretePolicy(
+            policy=model.policy,
+            mean=mean,
+            var=var,
+            epsilon=epsilon,
+            clip_obs=clip_obs,
+        )
+        input_names = ["obs"]
+        output_names = ["discrete_action", "action_logits"]
+        dynamic_axes = {
+            "obs": {0: "batch_size"},
+            "discrete_action": {0: "batch_size"},
+            "action_logits": {0: "batch_size"},
+        }
+
     export_model.eval()
 
     # 4. Export to ONNX
@@ -298,15 +380,11 @@ def main():
         export_model,
         dummy_input,
         str(output_path),
-        input_names=["obs"],
-        output_names=["discrete_action", "action_logits"],
-        dynamic_axes={
-            "obs": {0: "batch_size"},
-            "discrete_action": {0: "batch_size"},
-            "action_logits": {0: "batch_size"},
-        },
+        input_names=input_names,
+        output_names=output_names,
+        dynamic_axes=dynamic_axes,
         opset_version=args.opset,
-        external_data=False,
+        dynamo=False,
     )
 
     # Validate ONNX model integrity
@@ -318,8 +396,11 @@ def main():
     print(f"  - File Path   : {output_path}")
     print(f"  - File Size   : {file_size_kb:.2f} KB (Optimized, Critic stripped)")
     print(f"  - Input Node  : 'obs' (shape: [batch_size, {obs_dim}], dtype: float32)")
-    print(f"  - Output Node 1: 'discrete_action' (shape: [batch_size], dtype: int64)")
-    print(f"  - Output Node 2: 'action_logits' (shape: [batch_size, {num_actions}], dtype: float32)")
+    if is_continuous:
+        print(f"  - Output Node : 'continuous_action' (shape: [batch_size, {action_dim}], dtype: float32 in [-1.0, 1.0])")
+    else:
+        print(f"  - Output Node 1: 'discrete_action' (shape: [batch_size], dtype: int64)")
+        print(f"  - Output Node 2: 'action_logits' (shape: [batch_size, {num_actions}], dtype: float32)")
 
     # 5. Verification & Benchmark
     print("\n[4/4] Production Readiness Verification...")
@@ -327,6 +408,7 @@ def main():
         torch_model=export_model,
         onnx_path=output_path,
         obs_dim=obs_dim,
+        is_continuous=is_continuous,
         num_samples=100,
         tolerance=1e-5,
     )
